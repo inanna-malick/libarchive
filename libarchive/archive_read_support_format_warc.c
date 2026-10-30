@@ -224,21 +224,32 @@ archive_read_format_warc_read_header(struct archive_read *a,
 start_over:
 	/* Use read_ahead(); it already tracks unconsumed bytes, so this
 	 * reader does not need a separate shift buffer. */
-	buf = __archive_read_ahead(a, HDR_PROBE_LEN, &nrd);
+	eoh = NULL;
+	for (size_t probe = HDR_PROBE_LEN; eoh == NULL; ) {
+		buf = __archive_read_ahead(a, probe, &nrd);
 
-	if (nrd < 0) {
-		/* I/O or stream error. */
-		archive_set_error(
-			&a->archive, ARCHIVE_ERRNO_MISC,
-			"Bad record header");
-		return (ARCHIVE_FATAL);
-	} else if (buf == NULL) {
-		/* there should be room for at least WARC/bla\r\n
-		 * must be EOF therefore */
-		return (ARCHIVE_EOF);
+		if (nrd < 0) {
+			/* I/O or stream error. */
+			archive_set_error(
+				&a->archive, ARCHIVE_ERRNO_MISC,
+				"Bad record header");
+			return (ARCHIVE_FATAL);
+		} else if (buf == NULL) {
+			if (probe == HDR_PROBE_LEN) {
+				/* there should be room for at least WARC/bla\r\n
+				 * must be EOF therefore */
+				return (ARCHIVE_EOF);
+			}
+			break;
+		}
+		/* Locate the end of the record header. */
+		eoh = warc_find_eoh(buf, nrd);
+		if (eoh == NULL) {
+			if ((size_t)nrd >= 65536U)
+				break;
+			probe = (size_t)nrd + 1U;
+		}
 	}
-	/* Locate the end of the record header. */
-	eoh = warc_find_eoh(buf, nrd);
 	if (eoh == NULL) {
 		/* The header terminator was not found in the probed data. */
 		archive_set_error(
