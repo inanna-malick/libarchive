@@ -1100,32 +1100,42 @@ read_children(struct archive_read *a, struct file_info *parent)
 					multi->contents.last =
 					    &(multi->contents.first);
 				}
-				con = malloc(sizeof(struct content));
-				if (con == NULL) {
-					archive_set_error(
-					    &a->archive, ENOMEM,
-					    "No memory for multi extent");
-					__archive_read_consume(a, skip_size);
-					return (ARCHIVE_FATAL);
+				if (child->size > 0) {
+					con = malloc(sizeof(struct content));
+					if (con == NULL) {
+						archive_set_error(
+						    &a->archive, ENOMEM,
+						    "No memory for multi extent");
+						__archive_read_consume(a, skip_size);
+						return (ARCHIVE_FATAL);
+					}
+					con->offset = child->offset;
+					con->size = child->size;
+					con->next = NULL;
+					*multi->contents.last = con;
+					multi->contents.last = &(con->next);
 				}
-				con->offset = child->offset;
-				con->size = child->size;
-				con->next = NULL;
-				*multi->contents.last = con;
-				multi->contents.last = &(con->next);
-				if (multi == child) {
-					if (add_entry(a, iso9660, child)
+				if (multi != child) {
+					if (multi->size == 0 && child->size > 0) {
+						multi->offset = child->offset;
+						multi->number = child->number;
+					}
+					multi->size += child->size;
+				}
+				if (!child->multi_extent) {
+					if (add_entry(a, iso9660, multi)
 					    != ARCHIVE_OK)
 						return (ARCHIVE_FATAL);
-				} else {
-					multi->size += child->size;
-					if (!child->multi_extent)
-						multi = NULL;
+					multi = NULL;
 				}
 			} else
 				if (add_entry(a, iso9660, child) != ARCHIVE_OK)
 					return (ARCHIVE_FATAL);
 		}
+	}
+	if (multi != NULL) {
+		if (add_entry(a, iso9660, multi) != ARCHIVE_OK)
+			return (ARCHIVE_FATAL);
 	}
 
 	__archive_read_consume(a, skip_size);
@@ -1325,7 +1335,8 @@ archive_read_format_iso9660_read_header(struct archive_read *a,
 	/* Offset for sparse-file-aware clients. */
 	iso9660->entry_sparse_offset = 0;
 
-	if (file->offset + file->size > iso9660->volume_size) {
+	if (file->offset > iso9660->volume_size ||
+	    file->size > iso9660->volume_size - file->offset) {
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
 		    "File is beyond end-of-media: %s",
 		    archive_entry_pathname(entry));
@@ -2880,10 +2891,12 @@ next_cache_entry(struct archive_read *a, struct iso9660 *iso9660,
 				if (first_re == NULL)
 					first_re = re;
 				if (re->offset == file->cl_offset) {
-					re->parent->subdirs--;
+					if (re->parent != NULL)
+						re->parent->subdirs--;
 					re->parent = file->parent;
 					re->re = 0;
-					if (re->parent->re_descendant) {
+					if (re->parent != NULL &&
+					    re->parent->re_descendant) {
 						nexted_re = 1;
 						re->re_descendant = 1;
 						if (rede_add_entry(re) < 0)
